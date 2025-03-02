@@ -1,0 +1,26 @@
+[package]
+name = "rst-wnd"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "rst_wnd"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.23.3"
+numpy = "0.23"
+ndarray = "0.16.1"
+
+[profile.dev.build-override]
+opt-level = 1
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = true
+debug-assertions = false
