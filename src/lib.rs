@@ -118,7 +118,7 @@ fn rolling_mean_3(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Doub
         s_es = _mm256_hadd_pd(s_es, s_es);
 
         let s_slice: [Double; 4] = std::mem::transmute(s_es);
-        let mut s = s_slice[0] + s_slice[1] + s_slice[2] + s_slice[3];;
+        let mut s = s_slice[0] + s_slice[1] + s_slice[2] + s_slice[3];
 
         for i in aligned_end..k {
             s += *l_ptr.add(i);
