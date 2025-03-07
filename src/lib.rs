@@ -1,5 +1,6 @@
 #![feature(portable_simd)]
 
+use std::mem::MaybeUninit;
 use pyo3::prelude::*;
 use numpy::{PyArray1, PyArrayMethods, PyUntypedArrayMethods};
 use ndarray::prelude::*;
