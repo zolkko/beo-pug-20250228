@@ -6,7 +6,7 @@ use ndarray::prelude::*;
 
 type Double = f64;
 
-fn rolling_mean(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
+fn rolling_mean_safe(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
     let n = l.shape()[0];
     let k_inv = (k as Double).recip();
 
@@ -22,7 +22,7 @@ fn rolling_mean(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double
 }
 
 #[pyfunction]
-fn rolling_mean_v9<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
+fn rolling_mean_v9_safe<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
     let l_array_ro = l.try_readonly()?;
     let l_array = l_array_ro.as_array();
 
@@ -32,13 +32,13 @@ fn rolling_mean_v9<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usi
     let mut nd_res = unsafe { res.as_array_mut() };
 
     py.allow_threads(|| {
-        rolling_mean(&l_array, k, &mut nd_res);
+        rolling_mean_safe(&l_array, k, &mut nd_res);
     });
 
     Ok(res)
 }
 
-fn rolling_mean_2(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
+fn rolling_mean_raw_pointers(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
     let n = l.shape()[0];
     let k_inv = (k as Double).recip();
 
@@ -72,7 +72,7 @@ fn rolling_mean_2(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Doub
 }
 
 #[pyfunction]
-fn rolling_mean_v9_2<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
+fn rolling_mean_v9_raw_pointers<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
     let l_array_ro = l.try_readonly()?;
     let l_array = l_array_ro.as_array();
 
@@ -82,13 +82,77 @@ fn rolling_mean_v9_2<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: u
     let mut nd_res = unsafe { res.as_array_mut() };
 
     py.allow_threads(|| {
-        rolling_mean_2(&l_array, k, &mut nd_res);
+        rolling_mean_raw_pointers(&l_array, k, &mut nd_res);
     });
 
     Ok(res)
 }
 
-fn rolling_mean_3(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
+fn rolling_mean_portable_simd(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
+    use std::simd::prelude::*;
+
+    const N: usize = 4;
+
+    let res_slice = res.as_slice_mut().expect("res is not contiguous");
+    {
+        let nan_vec = Simd::<Double, N>::splat(Double::NAN);
+        let aligned_end = (k - 1) / N * N;
+
+        for i in (0..aligned_end).step_by(N) {
+            nan_vec.copy_to_slice(&mut res_slice[i..(i + N)]);
+        }
+
+        for val in &mut res_slice[aligned_end..(k - 1)] {
+            *val = Double::NAN;
+        }
+    };
+
+    let l_slice = l.as_slice().expect("l is not contiguous");
+    let mut s = {
+        let aligned_end = k / N * N;
+        let mut s_es = Simd::<Double, N>::splat(0.0);
+
+        for i in (0..aligned_end).step_by(N) {
+            let data = Simd::<Double, N>::from_slice(&l_slice[i..i + N]);
+            s_es += data;
+        }
+
+        let mut s: Double = s_es.to_array().iter().sum();
+        for val in &res_slice[aligned_end..k] {
+            s += *val;
+        }
+
+        s
+    };
+
+    let k_inv = (k as Double).recip();
+
+    res_slice[k - 1] = s * k_inv;
+
+    for i in k..l_slice.len() {
+        s += l_slice[i] - l_slice[i - k];
+        res_slice[i] = s * k_inv;
+    }
+}
+
+#[pyfunction]
+fn rolling_mean_v9_portable_simd<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
+    let l_array_ro = l.try_readonly()?;
+    let l_array = l_array_ro.as_array();
+
+    // allocate using numpy heap
+    let res = PyArray1::<Double>::zeros(py, l.shape()[0], true);
+    // SAFETY: we have just created the array and the array is contiguous and has one dimension.
+    let mut nd_res = unsafe { res.as_array_mut() };
+
+    py.allow_threads(|| {
+        rolling_mean_portable_simd(&l_array, k, &mut nd_res);
+    });
+
+    Ok(res)
+}
+
+fn rolling_mean_simd_intr(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
     use std::arch::x86_64::{_mm256_add_pd, _mm256_set1_pd, _mm256_storeu_pd, _mm256_loadu_pd, _mm256_hadd_pd};
 
     let n = l.shape()[0];
@@ -140,7 +204,7 @@ fn rolling_mean_3(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Doub
 }
 
 #[pyfunction]
-fn rolling_mean_v9_3<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
+fn rolling_mean_v9_simd_intr<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: usize) -> PyResult<Bound<'py, PyArray1<Double>>> {
     let l_array_ro = l.try_readonly()?;
     let l_array = l_array_ro.as_array();
 
@@ -150,7 +214,7 @@ fn rolling_mean_v9_3<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: u
     let mut nd_res = unsafe { res.as_array_mut() };
 
     py.allow_threads(|| {
-        rolling_mean_3(&l_array, k, &mut nd_res);
+        rolling_mean_simd_intr(&l_array, k, &mut nd_res);
     });
 
     Ok(res)
@@ -158,8 +222,9 @@ fn rolling_mean_v9_3<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k: u
 
 #[pymodule]
 fn rst_wnd(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(rolling_mean_v9, m)?)?;
-    m.add_function(wrap_pyfunction!(rolling_mean_v9_2, m)?)?;
-    m.add_function(wrap_pyfunction!(rolling_mean_v9_3, m)?)?;
+    m.add_function(wrap_pyfunction!(rolling_mean_v9_safe, m)?)?;
+    m.add_function(wrap_pyfunction!(rolling_mean_v9_raw_pointers, m)?)?;
+    m.add_function(wrap_pyfunction!(rolling_mean_v9_portable_simd, m)?)?;
+    m.add_function(wrap_pyfunction!(rolling_mean_v9_simd_intr, m)?)?;
     Ok(())
 }
