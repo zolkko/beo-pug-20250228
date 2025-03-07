@@ -39,14 +39,11 @@ fn rolling_mean_v9_safe<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Double>>, k
 }
 
 fn rolling_mean_raw_pointers(l: &ArrayView1<Double>, k: usize, res: &mut ArrayViewMut1<Double>) {
-    let n = l.shape()[0];
-    let k_inv = (k as Double).recip();
+    let res_ptr = res.as_mut_ptr();
 
-    let mut res_ptr = res.as_mut_ptr();
-    for _ in 0..k-1 {
+    for i in 0..k-1 {
         unsafe {
-            *res_ptr = Double::NAN;
-            res_ptr = res_ptr.add(1);
+            *res_ptr.add(i) = Double::NAN;
         }
     }
 
@@ -59,10 +56,12 @@ fn rolling_mean_raw_pointers(l: &ArrayView1<Double>, k: usize, res: &mut ArrayVi
         }
     }
 
+    let k_inv = (k as Double).recip();
     unsafe {
         *res_ptr.add(k - 1) = s * k_inv;
     }
 
+    let n = l.shape()[0];
     for i in k..n {
         unsafe {
             s += *l_ptr.add(i) - *l_ptr.add(i - k);
@@ -78,11 +77,11 @@ fn rolling_mean_v9_raw_pointers<'py>(py: Python<'py>, l: Bound<'py, PyArray1<Dou
 
     // allocate using numpy heap
     let res = PyArray1::<Double>::zeros(py, l.shape()[0], true);
-    // SAFETY: we have just created the array and the array is contiguous and has one dimension.
-    let mut nd_res = unsafe { res.as_array_mut() };
+    let mut res_rw = res.readwrite();
+    let mut res_mut_view = res_rw.as_array_mut();
 
     py.allow_threads(|| {
-        rolling_mean_raw_pointers(&l_array, k, &mut nd_res);
+        rolling_mean_raw_pointers(&l_array, k, &mut res_mut_view);
     });
 
     Ok(res)
