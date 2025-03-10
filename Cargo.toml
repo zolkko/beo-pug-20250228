@@ -9,7 +9,7 @@ name = "rst_wnd"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.23.3"
+pyo3 = "0.24"
 numpy = "0.23"
 ndarray = "0.16.1"
 
